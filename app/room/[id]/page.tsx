@@ -91,8 +91,8 @@ export default function RoomPage() {
     <div className="min-h-screen relative flex flex-col items-center justify-center p-6 overflow-hidden">
 
       {/* Babyfxce E background */}
-      <div className="absolute inset-0 z-0" style={{ backgroundImage: 'url(/babyfxce.jpg)', backgroundSize: 'cover', backgroundPosition: 'center top', backgroundRepeat: 'no-repeat', filter: 'grayscale(20%) brightness(0.75)' }} />
-      <div className="absolute inset-0 z-10" style={{ background: 'linear-gradient(to bottom, rgba(0,0,0,0.1) 0%, rgba(0,0,0,0.5) 100%)' }} />
+      <div className="absolute inset-0 z-0" style={{ backgroundImage: 'url(/babyfxce.jpg)', backgroundSize: 'cover', backgroundPosition: 'center 20%', backgroundRepeat: 'no-repeat', filter: 'grayscale(60%) brightness(0.85) contrast(1.1)' }} />
+      <div className="absolute inset-0 z-10" style={{ background: 'linear-gradient(to bottom, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0.75) 100%)' }} />
 
       {/* UI */}
       <div className="relative z-20 w-full max-w-sm flex flex-col gap-8">
