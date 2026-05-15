@@ -139,8 +139,8 @@ export default function Home() {
       {/* UI */}
       <div className="relative z-20 w-full max-w-md">
         <div className="text-center mb-10">
-          <h1 className="text-5xl font-black text-white mb-2">🎵 AUX BATTLE</h1>
-          <p className="text-zinc-400 text-lg">The ultimate music bracket showdown</p>
+          <h1 className="text-7xl font-black text-white mb-2 tracking-widest drop-shadow-[0_0_20px_rgba(168,85,247,0.8)]" style={{ fontFamily: 'var(--font-display)' }}>🎵 AUX BATTLE</h1>
+          <p className="text-purple-300 text-lg tracking-widest uppercase" style={{ fontFamily: 'var(--font-mono)' }}>The ultimate music bracket showdown</p>
         </div>
 
         {mode === 'home' && (
