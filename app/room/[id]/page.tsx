@@ -30,24 +30,20 @@ export default function RoomPage() {
 
     load()
 
-    const playersSub = supabase
-      .channel(`room-${id}-players`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'players', filter: `room_id=eq.${id}` }, () => {
-        supabase.from('players').select().eq('room_id', id).then(({ data }) => setPlayers(data || []))
+    const sub = supabase
+      .channel(`room-${id}-lobby`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'players', filter: `room_id=eq.${id}` }, (payload) => {
+        setPlayers(prev => [...prev, payload.new as Player])
       })
-      .subscribe()
-
-    const roomSub = supabase
-      .channel(`room-${id}-status`)
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'players', filter: `room_id=eq.${id}` }, (payload) => {
+        setPlayers(prev => prev.filter(p => p.id !== payload.old.id))
+      })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${id}` }, (payload) => {
         if (payload.new.status === 'playing') router.push(`/room/${id}/bracket`)
       })
       .subscribe()
 
-    return () => {
-      supabase.removeChannel(playersSub)
-      supabase.removeChannel(roomSub)
-    }
+    return () => { supabase.removeChannel(sub) }
   }, [id, router])
 
   async function startGame() {
