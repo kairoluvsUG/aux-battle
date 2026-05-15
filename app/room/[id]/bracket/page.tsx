@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, memo } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 
@@ -15,7 +15,8 @@ type Vote = { id: string; match_id: string; voter_name: string; voted_for: strin
 
 function getEmbedUrl(url: string) {
   const yt = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/)
-  if (yt) return `https://www.youtube.com/embed/${yt[1]}?autoplay=1&controls=1&rel=0&modestbranding=1`
+  // mute=1 lets it autoplay across all browsers without user gesture; enablejsapi=1 lets us unmute via postMessage
+  if (yt) return `https://www.youtube.com/embed/${yt[1]}?autoplay=1&mute=1&controls=1&rel=0&modestbranding=1&enablejsapi=1`
   const sp = url.match(/spotify\.com\/(track|album|playlist)\/([a-zA-Z0-9]+)/)
   if (sp) return `https://open.spotify.com/embed/${sp[1]}/${sp[2]}`
   return null
@@ -25,6 +26,55 @@ function pName(players: Player[], id: string | null) {
   if (!id) return 'BYE'
   return players.find(p => p.id === id)?.name || '?'
 }
+
+// Isolated so re-renders from votes/state don't restart the video
+const SongEmbed = memo(function SongEmbed({ url, label }: { url: string; label: string }) {
+  const [unmuted, setUnmuted] = useState(false)
+  const iframeRef = useRef<HTMLIFrameElement>(null)
+  const embed = getEmbedUrl(url)
+  const isYoutube = /youtu/.test(url)
+
+  function unmute() {
+    setUnmuted(true)
+    if (iframeRef.current?.contentWindow) {
+      // Unmute and restore full volume via YouTube IFrame postMessage API
+      iframeRef.current.contentWindow.postMessage(JSON.stringify({ event: 'command', func: 'unMute', args: [] }), '*')
+      iframeRef.current.contentWindow.postMessage(JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }), '*')
+    }
+  }
+
+  if (!embed) return <a href={url} target="_blank" className="text-white/50 underline text-sm break-all">{url}</a>
+
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-xs tracking-[0.3em] text-white/40 uppercase">{label}</p>
+      <div className="relative">
+        <iframe
+          ref={iframeRef}
+          src={embed}
+          className="w-full rounded-xl"
+          height={isYoutube ? 200 : 152}
+          allow="autoplay; clipboard-write; encrypted-media; fullscreen"
+          allowFullScreen
+        />
+        {isYoutube && !unmuted && (
+          <button
+            onClick={unmute}
+            className="absolute inset-0 flex items-end justify-center pb-4 rounded-xl"
+            style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 50%)' }}
+          >
+            <span className="bg-white text-black font-bold text-sm px-6 py-2.5 rounded-full tracking-widest uppercase shadow-lg">
+              Tap to Unmute
+            </span>
+          </button>
+        )}
+      </div>
+      {!isYoutube && (
+        <p className="text-white/30 text-xs uppercase tracking-widest text-center">Press play above</p>
+      )}
+    </div>
+  )
+})
 
 export default function BracketPage() {
   const { id } = useParams<{ id: string }>()
@@ -277,20 +327,6 @@ export default function BracketPage() {
     : false
   const revealButtonLabel = hasMoreInRound ? 'Next Match →' : 'Start Next Round →'
 
-  function renderEmbed(url: string | null, label: string) {
-    if (!url) return null
-    const embed = getEmbedUrl(url)
-    return (
-      <div className="flex flex-col gap-2">
-        <p className="text-xs tracking-[0.3em] text-white/40 uppercase">{label}</p>
-        {embed
-          ? <iframe src={embed} className="w-full rounded-xl" height={url.includes('spotify') ? 152 : 180} allow="autoplay; clipboard-write; encrypted-media; fullscreen" allowFullScreen />
-          : <a href={url} target="_blank" className="text-white/50 underline text-sm break-all">{url}</a>
-        }
-      </div>
-    )
-  }
-
   return (
     <div className="min-h-screen relative flex flex-col p-4 pb-10 overflow-hidden">
       <div className="absolute inset-0 z-0" style={{ backgroundImage: 'url(/carti.jpg)', backgroundSize: 'cover', backgroundPosition: 'center top', filter: 'grayscale(20%) brightness(0.75)' }} />
@@ -386,9 +422,9 @@ export default function BracketPage() {
             )}
 
             {/* PLAYING SONG 1 */}
-            {currentMatch.status === 'playing_p1' && (
+            {currentMatch.status === 'playing_p1' && currentMatch.player1_song && (
               <div className="flex flex-col gap-4">
-                {renderEmbed(currentMatch.player1_song, `${pName(players, currentMatch.player1_id)}'s Song`)}
+                <SongEmbed url={currentMatch.player1_song} label={`${pName(players, currentMatch.player1_id)}'s Song`} />
                 {isHost && (
                   <button onClick={() => hostSet('playing_p2')} className="w-full py-3 bg-white text-black font-semibold text-sm tracking-widest uppercase rounded-lg hover:bg-white/90 transition-colors">
                     Next — Play Song 2 →
@@ -398,9 +434,9 @@ export default function BracketPage() {
             )}
 
             {/* PLAYING SONG 2 */}
-            {currentMatch.status === 'playing_p2' && (
+            {currentMatch.status === 'playing_p2' && currentMatch.player2_song && (
               <div className="flex flex-col gap-4">
-                {renderEmbed(currentMatch.player2_song, `${pName(players, currentMatch.player2_id)}'s Song`)}
+                <SongEmbed url={currentMatch.player2_song} label={`${pName(players, currentMatch.player2_id)}'s Song`} />
                 {isHost && (
                   <button onClick={() => hostSet('voting')} className="w-full py-3 bg-white text-black font-semibold text-sm tracking-widest uppercase rounded-lg hover:bg-white/90 transition-colors">
                     Open Voting →
