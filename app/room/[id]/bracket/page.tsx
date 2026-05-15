@@ -101,7 +101,14 @@ export default function BracketPage() {
     }
   }, [id, loadAll])
 
-  useEffect(() => { setMyVote(null) }, [currentMatch?.id])
+  // Restore voted state when match changes or votes load
+  useEffect(() => {
+    if (!currentMatch || !players.length) return
+    const myName = players.find(p => p.id === myPlayerId)?.name
+    if (!myName) return
+    const existing = votes.find(v => v.match_id === currentMatch.id && v.voter_name === myName)
+    setMyVote(existing ? existing.voted_for : null)
+  }, [currentMatch?.id, votes, myPlayerId, players])
 
   async function submitSong() {
     if (!mySong.trim() || !currentMatch || submitting) return
@@ -126,7 +133,7 @@ export default function BracketPage() {
     const name = players.find(p => p.id === myPlayerId)?.name || 'Anon'
     setMyVote(votedFor)
     setVotes(prev => [...prev, { id: 'opt-' + Date.now(), match_id: currentMatch.id, voter_name: name, voted_for: votedFor }])
-    await supabase.from('votes').insert({ match_id: currentMatch.id, voter_name: name, voted_for: votedFor })
+    await supabase.from('votes').upsert({ match_id: currentMatch.id, voter_name: name, voted_for: votedFor }, { onConflict: 'match_id,voter_name' })
   }
 
   async function finishMatch() {
