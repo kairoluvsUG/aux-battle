@@ -41,6 +41,7 @@ export default function BracketPage() {
   const [submitting, setSubmitting] = useState(false)
   const [finished, setFinished] = useState(false)
   const matchIdsRef = useRef<Set<string>>(new Set())
+  const advancingRef = useRef(false)
 
   const allPending = matches.length > 0 && matches.every(m => m.status === 'pending')
   const currentMatch = allPending ? null : matches.find(m => m.status !== 'complete' && m.status !== 'pending')
@@ -69,7 +70,8 @@ export default function BracketPage() {
   }, [id])
 
   useEffect(() => {
-    setIsHost(localStorage.getItem('isHost') === 'true')
+    const host = localStorage.getItem('isHost') === 'true'
+    setIsHost(host)
     setMyPlayerId(localStorage.getItem('playerId') || '')
     loadAll()
 
@@ -82,16 +84,32 @@ export default function BracketPage() {
         setMatches(prev => {
           if (prev.find(m => m.id === payload.new.id)) return prev
           matchIdsRef.current.add(payload.new.id)
-          return [...prev, payload.new as Match]
+          const next = [...prev, payload.new as Match]
+          return next.sort((a, b) => a.round !== b.round ? a.round - b.round : a.position - b.position)
         })
       })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'votes' }, (payload) => {
-        // Only add votes that belong to this room's matches
         if (!matchIdsRef.current.has(payload.new.match_id)) return
         setVotes(prev => {
-          if (prev.find(v => v.id === payload.new.id)) return prev
+          // Replace optimistic entry (same voter + match) with the real DB row to prevent double-counting
+          const hasOptimistic = prev.find(v => v.voter_name === payload.new.voter_name && v.match_id === payload.new.match_id)
+          if (hasOptimistic) {
+            return prev.map(v =>
+              v.voter_name === payload.new.voter_name && v.match_id === payload.new.match_id
+                ? payload.new as Vote
+                : v
+            )
+          }
           return [...prev, payload.new as Vote]
         })
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'votes' }, (payload) => {
+        if (!matchIdsRef.current.has(payload.new.match_id)) return
+        setVotes(prev => prev.map(v =>
+          v.voter_name === payload.new.voter_name && v.match_id === payload.new.match_id
+            ? payload.new as Vote
+            : v
+        ))
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${id}` }, (payload) => {
         if (payload.new.status === 'finished') setFinished(true)
@@ -99,7 +117,6 @@ export default function BracketPage() {
       })
       .subscribe()
 
-    // Refetch when tab becomes visible
     const onVisible = () => { if (document.visibilityState === 'visible') loadAll() }
     document.addEventListener('visibilitychange', onVisible)
 
@@ -109,14 +126,24 @@ export default function BracketPage() {
     }
   }, [id, loadAll])
 
-  // Restore voted state when match changes or votes load
+  // Reset vote state when match changes; restore from loaded votes
   useEffect(() => {
-    if (!currentMatch || !players.length) return
+    if (!currentMatch) { setMyVote(null); return }
     const myName = players.find(p => p.id === myPlayerId)?.name
-    if (!myName) return
+    if (!myName) { setMyVote(null); return }
     const existing = votes.find(v => v.match_id === currentMatch.id && v.voter_name === myName)
-    setMyVote(existing ? existing.voted_for : null)
-  }, [currentMatch?.id, votes, myPlayerId, players])
+    setMyVote(existing?.voted_for ?? null)
+  }, [currentMatch?.id, myPlayerId, players, votes])
+
+  // Auto-advance BYE matches (host only, runs once per match)
+  useEffect(() => {
+    if (!isHost || !currentMatch) return
+    if (currentMatch.player2_id === null && currentMatch.status === 'submitting') {
+      const winnerId = currentMatch.player1_id!
+      setMatches(prev => prev.map(m => m.id === currentMatch.id ? { ...m, winner_id: winnerId, status: 'revealing' } : m))
+      supabase.from('matches').update({ winner_id: winnerId, status: 'revealing' }).eq('id', currentMatch.id)
+    }
+  }, [currentMatch?.id, currentMatch?.status, isHost])
 
   async function submitSong() {
     if (!mySong.trim() || !currentMatch || submitting) return
@@ -140,20 +167,39 @@ export default function BracketPage() {
     if (!currentMatch || myVote) return
     const name = players.find(p => p.id === myPlayerId)?.name || 'Anon'
     setMyVote(votedFor)
-    setVotes(prev => [...prev, { id: 'opt-' + Date.now(), match_id: currentMatch.id, voter_name: name, voted_for: votedFor }])
-    await supabase.from('votes').upsert({ match_id: currentMatch.id, voter_name: name, voted_for: votedFor }, { onConflict: 'match_id,voter_name' })
+    // Upsert optimistic entry — keyed by voter_name+match_id, not id
+    setVotes(prev => {
+      const filtered = prev.filter(v => !(v.voter_name === name && v.match_id === currentMatch.id))
+      return [...filtered, { id: 'opt-' + Date.now(), match_id: currentMatch.id, voter_name: name, voted_for: votedFor }]
+    })
+    await supabase.from('votes').upsert(
+      { match_id: currentMatch.id, voter_name: name, voted_for: votedFor },
+      { onConflict: 'match_id,voter_name' }
+    )
   }
 
-  async function finishMatch() {
+  // Called when host clicks "Decide Winner" — reveals result, stays on the match
+  async function decideWinner() {
     if (!currentMatch) return
     const matchVotes = votes.filter(v => v.match_id === currentMatch.id)
     const p1v = matchVotes.filter(v => v.voted_for === currentMatch.player1_id).length
     const p2v = matchVotes.filter(v => v.voted_for === currentMatch.player2_id).length
-    const winnerId = p1v >= p2v ? currentMatch.player1_id! : currentMatch.player2_id!
+    const winnerId = currentMatch.player2_id === null
+      ? currentMatch.player1_id!
+      : p1v >= p2v ? currentMatch.player1_id! : currentMatch.player2_id!
 
-    // Optimistic update
-    setMatches(prev => prev.map(m => m.id === currentMatch.id ? { ...m, winner_id: winnerId, status: 'complete' } : m))
-    await supabase.from('matches').update({ winner_id: winnerId, status: 'complete' }).eq('id', currentMatch.id)
+    setMatches(prev => prev.map(m => m.id === currentMatch.id ? { ...m, winner_id: winnerId, status: 'revealing' } : m))
+    await supabase.from('matches').update({ winner_id: winnerId, status: 'revealing' }).eq('id', currentMatch.id)
+  }
+
+  // Called when host clicks "Next" after the winner reveal
+  async function advanceMatch() {
+    if (!currentMatch || advancingRef.current) return
+    advancingRef.current = true
+    const winnerId = currentMatch.winner_id!
+
+    setMatches(prev => prev.map(m => m.id === currentMatch.id ? { ...m, status: 'complete' } : m))
+    await supabase.from('matches').update({ status: 'complete' }).eq('id', currentMatch.id)
 
     const roundMatches = matches.filter(m => m.round === currentMatch.round)
     const nextInRound = roundMatches.find(m => m.position === currentMatch.position + 1 && m.status === 'pending')
@@ -162,10 +208,9 @@ export default function BracketPage() {
       setMatches(prev => prev.map(m => m.id === nextInRound.id ? { ...m, status: 'submitting' } : m))
       await supabase.from('matches').update({ status: 'submitting' }).eq('id', nextInRound.id)
     } else {
-      const allRoundWithWinner = roundMatches.map(m =>
-        m.id === currentMatch.id ? { ...m, winner_id: winnerId } : m
-      )
-      const winners = allRoundWithWinner.map(m => m.winner_id).filter(Boolean) as string[]
+      // This was the last match in the round — collect all winners
+      const allRound = roundMatches.map(m => m.id === currentMatch.id ? { ...m, winner_id: winnerId } : m)
+      const winners = allRound.map(m => m.winner_id).filter(Boolean) as string[]
 
       if (winners.length <= 1) {
         setFinished(true)
@@ -183,22 +228,30 @@ export default function BracketPage() {
         await supabase.from('matches').insert(nextMatches)
       }
     }
+
+    advancingRef.current = false
   }
 
-  // Winner screen
+  // Tournament champion screen
   if (finished) {
-    const lastCompleted = [...matches].filter(m => m.status === 'complete').sort((a, b) => b.round - a.round)[0]
+    const lastCompleted = [...matches]
+      .filter(m => m.status === 'complete' || m.status === 'revealing')
+      .sort((a, b) => b.round - a.round || b.position - a.position)[0]
     const winner = players.find(p => p.id === lastCompleted?.winner_id)
     return (
       <div className="min-h-screen relative flex flex-col items-center justify-center p-6 overflow-hidden">
         <div className="absolute inset-0 z-0" style={{ backgroundImage: 'url(/carti.jpg)', backgroundSize: 'cover', backgroundPosition: 'center top', filter: 'grayscale(20%) brightness(0.75)' }} />
-        <div className="absolute inset-0 z-10" style={{ background: 'linear-gradient(to bottom, rgba(0,0,0,0.1) 0%, rgba(0,0,0,0.6) 100%)' }} />
+        <div className="absolute inset-0 z-10" style={{ background: 'linear-gradient(to bottom, rgba(0,0,0,0.2) 0%, rgba(0,0,0,0.7) 100%)' }} />
         <div className="relative z-20 text-center flex flex-col gap-6">
           <div>
-            <p className="text-xs tracking-[0.3em] text-white/50 uppercase mb-2">AUX Battle Winner</p>
+            <p className="text-xs tracking-[0.3em] text-white/50 uppercase mb-4">AUX Battle Champion</p>
             <h1 className="text-7xl font-bold text-white leading-none">{winner?.name || '?'}</h1>
+            <p className="text-white/40 text-sm mt-4 tracking-[0.2em] uppercase">has the best taste</p>
           </div>
-          <button onClick={() => router.push('/')} className="px-6 py-3 border border-white/30 text-white/60 text-sm font-semibold tracking-widest uppercase rounded-lg hover:border-white/60 hover:text-white transition-colors">
+          <button
+            onClick={() => router.push('/')}
+            className="px-6 py-3 border border-white/30 text-white/60 text-sm font-semibold tracking-widest uppercase rounded-lg hover:border-white/60 hover:text-white transition-colors"
+          >
             Back to Home
           </button>
         </div>
@@ -209,13 +262,20 @@ export default function BracketPage() {
   const isP1 = currentMatch?.player1_id === myPlayerId
   const isP2 = currentMatch?.player2_id === myPlayerId
   const isInMatch = isP1 || isP2
-  const myAlreadySubmitted = currentMatch ? (isP1 ? !!currentMatch.player1_song : isP2 ? !!currentMatch.player2_song : false) : false
+  const myAlreadySubmitted = isP1 ? !!currentMatch?.player1_song : isP2 ? !!currentMatch?.player2_song : false
   const matchVotes = votes.filter(v => v.match_id === currentMatch?.id)
   const p1Votes = matchVotes.filter(v => v.voted_for === currentMatch?.player1_id).length
   const p2Votes = matchVotes.filter(v => v.voted_for === currentMatch?.player2_id).length
+  const totalVotes = p1Votes + p2Votes
   const bothSubmitted = !!(currentMatch?.player1_song && currentMatch?.player2_song)
-  // Who can vote: host mode = only host, audience mode = everyone except the two competing
   const canVote = judgeMode === 'host' ? isHost : !isInMatch
+
+  // Determine next-button label for the revealing state
+  const roundMatchesForCurrent = currentMatch ? matches.filter(m => m.round === currentMatch.round) : []
+  const hasMoreInRound = currentMatch
+    ? roundMatchesForCurrent.some(m => m.position > currentMatch.position && m.status === 'pending')
+    : false
+  const revealButtonLabel = hasMoreInRound ? 'Next Match →' : 'Start Next Round →'
 
   function renderEmbed(url: string | null, label: string) {
     if (!url) return null
@@ -237,6 +297,8 @@ export default function BracketPage() {
       <div className="absolute inset-0 z-10" style={{ background: 'linear-gradient(to bottom, rgba(0,0,0,0.15) 0%, rgba(0,0,0,0.65) 100%)' }} />
 
       <div className="relative z-20 w-full max-w-lg mx-auto flex flex-col gap-6 pt-6">
+
+        {/* Header */}
         <div className="flex items-end justify-between">
           <div>
             <p className="text-xs tracking-[0.3em] text-white/40 uppercase mb-1">
@@ -247,21 +309,19 @@ export default function BracketPage() {
           <button onClick={() => router.push('/')} className="text-white/30 text-xs tracking-widest uppercase hover:text-white/60 transition-colors">Leave</button>
         </div>
 
-        {/* Bracket reveal — shown before any match starts */}
+        {/* Bracket reveal — all pending, host hasn't started yet */}
         {allPending && (
           <div className="bg-black/40 backdrop-blur-sm rounded-2xl p-5 border border-white/10 flex flex-col gap-4">
             <p className="text-xs tracking-[0.3em] text-white/50 uppercase">Round 1 Matchups</p>
-            {matches.filter(m => m.round === 1).map((match, i) => (
+            {matches.filter(m => m.round === 1).map(match => (
               <div key={match.id} className="flex items-center justify-between py-3 border-b border-white/10 last:border-0">
                 <span className="text-white font-semibold">{pName(players, match.player1_id)}</span>
                 <span className="text-white/30 text-xs px-3">vs</span>
                 <span className="text-white font-semibold">{pName(players, match.player2_id)}</span>
-                {match.player2_id === null && (
-                  <span className="text-white/20 text-xs ml-2">auto-advance</span>
-                )}
+                {match.player2_id === null && <span className="text-white/20 text-xs ml-2">auto-advance</span>}
               </div>
             ))}
-            {isHost && (
+            {isHost ? (
               <button
                 onClick={async () => {
                   const first = matches.find(m => m.round === 1 && m.position === 0)
@@ -273,21 +333,24 @@ export default function BracketPage() {
               >
                 Start Match 1 →
               </button>
-            )}
-            {!isHost && (
+            ) : (
               <p className="text-white/30 text-xs tracking-widest uppercase text-center">Waiting for host to start...</p>
             )}
           </div>
         )}
 
+        {/* Active match card */}
         {currentMatch && (
           <div className="bg-black/40 backdrop-blur-sm rounded-2xl p-5 border border-white/10 flex flex-col gap-5">
+
+            {/* Players header */}
             <div className="flex items-center justify-between">
               <span className="text-white font-bold text-lg">{pName(players, currentMatch.player1_id)}</span>
               <span className="text-white/30 text-sm">vs</span>
               <span className="text-white font-bold text-lg">{pName(players, currentMatch.player2_id)}</span>
             </div>
 
+            {/* SUBMITTING */}
             {currentMatch.status === 'submitting' && (
               <div className="flex flex-col gap-3">
                 {isInMatch && !myAlreadySubmitted ? (
@@ -307,44 +370,56 @@ export default function BracketPage() {
                   </>
                 ) : isInMatch && myAlreadySubmitted ? (
                   <p className="text-white/40 text-xs uppercase tracking-widest">Locked in — waiting for opponent...</p>
+                ) : bothSubmitted ? (
+                  <p className="text-white/40 text-xs uppercase tracking-widest">Both songs in — waiting for host...</p>
                 ) : (
                   <p className="text-white/40 text-xs uppercase tracking-widest">
                     Waiting for {!currentMatch.player1_song ? pName(players, currentMatch.player1_id) : pName(players, currentMatch.player2_id)} to submit...
                   </p>
                 )}
                 {isHost && bothSubmitted && (
-                  <button onClick={() => hostSet('playing_p1')} className="w-full py-3 bg-white text-black font-semibold text-sm tracking-widest uppercase rounded-lg">
+                  <button onClick={() => hostSet('playing_p1')} className="w-full py-3 bg-white text-black font-semibold text-sm tracking-widest uppercase rounded-lg hover:bg-white/90 transition-colors">
                     Both In — Play Song 1 →
                   </button>
                 )}
               </div>
             )}
 
+            {/* PLAYING SONG 1 */}
             {currentMatch.status === 'playing_p1' && (
               <div className="flex flex-col gap-4">
                 {renderEmbed(currentMatch.player1_song, `${pName(players, currentMatch.player1_id)}'s Song`)}
-                {isHost && <button onClick={() => hostSet('playing_p2')} className="w-full py-3 bg-white text-black font-semibold text-sm tracking-widest uppercase rounded-lg">Next — Play Song 2 →</button>}
+                {isHost && (
+                  <button onClick={() => hostSet('playing_p2')} className="w-full py-3 bg-white text-black font-semibold text-sm tracking-widest uppercase rounded-lg hover:bg-white/90 transition-colors">
+                    Next — Play Song 2 →
+                  </button>
+                )}
               </div>
             )}
 
+            {/* PLAYING SONG 2 */}
             {currentMatch.status === 'playing_p2' && (
               <div className="flex flex-col gap-4">
                 {renderEmbed(currentMatch.player2_song, `${pName(players, currentMatch.player2_id)}'s Song`)}
-                {isHost && <button onClick={() => hostSet('voting')} className="w-full py-3 bg-white text-black font-semibold text-sm tracking-widest uppercase rounded-lg">Open Voting →</button>}
+                {isHost && (
+                  <button onClick={() => hostSet('voting')} className="w-full py-3 bg-white text-black font-semibold text-sm tracking-widest uppercase rounded-lg hover:bg-white/90 transition-colors">
+                    Open Voting →
+                  </button>
+                )}
               </div>
             )}
 
+            {/* VOTING */}
             {currentMatch.status === 'voting' && (
               <div className="flex flex-col gap-4">
                 <div className="flex items-center justify-between">
                   <p className="text-white/40 text-xs uppercase tracking-widest">
                     {judgeMode === 'host' ? 'Host is deciding...' : 'Vote for your favorite'}
                   </p>
-                  <p className="text-white/20 text-xs uppercase tracking-widest">
-                    {judgeMode === 'host' ? 'Host judge' : 'Audience judge'}
-                  </p>
+                  <p className="text-white/25 text-xs">{totalVotes} vote{totalVotes !== 1 ? 's' : ''}</p>
                 </div>
 
+                {/* Vote buttons — only for eligible voters who haven't voted */}
                 {canVote && !myVote && (
                   <div className="flex gap-3">
                     <button onClick={() => castVote(currentMatch.player1_id!)} className="flex-1 py-4 bg-white/10 border border-white/20 text-white font-semibold text-sm rounded-xl hover:bg-white/20 active:scale-95 transition-all">
@@ -356,47 +431,93 @@ export default function BracketPage() {
                   </div>
                 )}
 
-                {canVote && myVote && (
-                  <div className="flex flex-col gap-3">
-                    <p className="text-white/40 text-xs uppercase tracking-widest">Voted ✓</p>
-                    <div className="flex gap-3">
-                      <div className={`flex-1 text-center py-3 rounded-xl border transition-colors ${myVote === currentMatch.player1_id ? 'border-white/50 bg-white/10' : 'border-white/10'}`}>
-                        <p className="text-white font-bold text-2xl">{p1Votes}</p>
-                        <p className="text-white/40 text-xs mt-1">{pName(players, currentMatch.player1_id)}</p>
-                      </div>
-                      <div className={`flex-1 text-center py-3 rounded-xl border transition-colors ${myVote === currentMatch.player2_id ? 'border-white/50 bg-white/10' : 'border-white/10'}`}>
-                        <p className="text-white font-bold text-2xl">{p2Votes}</p>
-                        <p className="text-white/40 text-xs mt-1">{pName(players, currentMatch.player2_id)}</p>
-                      </div>
+                {/* Live vote tally — visible after voting, and always to non-voters */}
+                {(myVote || !canVote) && (
+                  <div className="flex gap-3">
+                    <div className={`flex-1 text-center py-4 rounded-xl border transition-colors ${myVote === currentMatch.player1_id ? 'border-white/50 bg-white/10' : 'border-white/10 bg-white/5'}`}>
+                      <p className="text-white font-bold text-3xl">{p1Votes}</p>
+                      <p className="text-white/40 text-xs mt-1">{pName(players, currentMatch.player1_id)}</p>
+                    </div>
+                    <div className={`flex-1 text-center py-4 rounded-xl border transition-colors ${myVote === currentMatch.player2_id ? 'border-white/50 bg-white/10' : 'border-white/10 bg-white/5'}`}>
+                      <p className="text-white font-bold text-3xl">{p2Votes}</p>
+                      <p className="text-white/40 text-xs mt-1">{pName(players, currentMatch.player2_id)}</p>
                     </div>
                   </div>
                 )}
 
-                {!canVote && (
-                  <p className="text-white/30 text-xs uppercase tracking-widest">
-                    {isInMatch ? 'You\'re competing — sit tight' : 'Waiting for votes...'}
-                  </p>
+                {canVote && myVote && <p className="text-white/30 text-xs uppercase tracking-widest text-center">Locked in ✓</p>}
+                {!canVote && isInMatch && <p className="text-white/30 text-xs uppercase tracking-widest">You're competing — sit tight</p>}
+                {!canVote && !isInMatch && judgeMode === 'host' && <p className="text-white/30 text-xs uppercase tracking-widest">Host is deciding...</p>}
+
+                {isHost && (
+                  <button onClick={decideWinner} className="w-full py-3 bg-white text-black font-semibold text-sm tracking-widest uppercase rounded-lg hover:bg-white/90 transition-colors">
+                    Decide Winner →
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* REVEALING — match winner screen */}
+            {currentMatch.status === 'revealing' && (
+              <div className="flex flex-col items-center gap-5">
+                <div className="text-center py-2">
+                  <p className="text-xs tracking-[0.3em] text-white/40 uppercase mb-3">Match Winner</p>
+                  <p className="text-5xl font-bold text-white">{pName(players, currentMatch.winner_id)}</p>
+                  {judgeMode === 'host' && <p className="text-white/30 text-xs mt-2 uppercase tracking-widest">Host's pick</p>}
+                </div>
+
+                {/* Final vote tally */}
+                {currentMatch.player2_id !== null && (
+                  <div className="flex gap-3 w-full">
+                    <div className={`flex-1 text-center py-4 rounded-xl border ${currentMatch.winner_id === currentMatch.player1_id ? 'border-white/60 bg-white/15' : 'border-white/10 bg-white/5'}`}>
+                      <p className="text-white font-bold text-3xl">{p1Votes}</p>
+                      <p className={`text-xs mt-1 ${currentMatch.winner_id === currentMatch.player1_id ? 'text-white/60' : 'text-white/30'}`}>
+                        {pName(players, currentMatch.player1_id)}
+                      </p>
+                    </div>
+                    <div className={`flex-1 text-center py-4 rounded-xl border ${currentMatch.winner_id === currentMatch.player2_id ? 'border-white/60 bg-white/15' : 'border-white/10 bg-white/5'}`}>
+                      <p className="text-white font-bold text-3xl">{p2Votes}</p>
+                      <p className={`text-xs mt-1 ${currentMatch.winner_id === currentMatch.player2_id ? 'text-white/60' : 'text-white/30'}`}>
+                        {pName(players, currentMatch.player2_id)}
+                      </p>
+                    </div>
+                  </div>
                 )}
 
-                {isHost && <button onClick={finishMatch} className="w-full py-3 bg-white text-black font-semibold text-sm tracking-widest uppercase rounded-lg">Decide Winner →</button>}
+                {isHost ? (
+                  <button onClick={advanceMatch} className="w-full py-3 bg-white text-black font-semibold text-sm tracking-widest uppercase rounded-lg hover:bg-white/90 transition-colors">
+                    {revealButtonLabel}
+                  </button>
+                ) : (
+                  <p className="text-white/30 text-xs uppercase tracking-widest">Waiting for host...</p>
+                )}
               </div>
             )}
           </div>
         )}
 
+        {/* Full bracket overview */}
         <div className="flex flex-col gap-5">
           {Array.from({ length: maxRound }, (_, i) => i + 1).map(round => (
             <div key={round}>
               <p className="text-xs tracking-[0.3em] text-white/30 uppercase mb-2">Round {round}</p>
               <div className="flex flex-col gap-2">
-                {matches.filter(m => m.round === round).map(match => (
-                  <div key={match.id} className={`flex items-center justify-between px-4 py-3 rounded-xl border transition-colors ${match.id === currentMatch?.id ? 'border-white/40 bg-white/10' : 'border-white/10 bg-white/5'}`}>
-                    <span className={`text-sm ${match.status === 'complete' && match.winner_id === match.player1_id ? 'text-white font-semibold' : 'text-white/50'}`}>{pName(players, match.player1_id)}</span>
-                    <span className="text-white/20 text-xs">vs</span>
-                    <span className={`text-sm ${match.status === 'complete' && match.winner_id === match.player2_id ? 'text-white font-semibold' : 'text-white/50'}`}>{pName(players, match.player2_id)}</span>
-                    {match.status === 'complete' && <span className="text-white/30 text-xs ml-2">✓</span>}
-                  </div>
-                ))}
+                {matches.filter(m => m.round === round).map(match => {
+                  const isActive = match.id === currentMatch?.id
+                  const isDone = match.status === 'complete' || match.status === 'revealing'
+                  return (
+                    <div key={match.id} className={`flex items-center justify-between px-4 py-3 rounded-xl border transition-colors ${isActive ? 'border-white/40 bg-white/10' : 'border-white/10 bg-white/5'}`}>
+                      <span className={`text-sm ${isDone && match.winner_id === match.player1_id ? 'text-white font-semibold' : isActive ? 'text-white/80' : 'text-white/40'}`}>
+                        {pName(players, match.player1_id)}
+                      </span>
+                      <span className="text-white/20 text-xs">vs</span>
+                      <span className={`text-sm ${isDone && match.winner_id === match.player2_id ? 'text-white font-semibold' : isActive ? 'text-white/80' : 'text-white/40'}`}>
+                        {pName(players, match.player2_id)}
+                      </span>
+                      {isDone && <span className="text-white/30 text-xs ml-2">✓</span>}
+                    </div>
+                  )
+                })}
               </div>
             </div>
           ))}
