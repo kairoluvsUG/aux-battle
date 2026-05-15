@@ -57,12 +57,12 @@ export default function Home() {
           backgroundSize: 'cover',
           backgroundPosition: 'center top',
           backgroundRepeat: 'no-repeat',
-          filter: 'grayscale(20%) brightness(0.55)',
+          filter: 'grayscale(20%) brightness(0.75)',
         }}
       />
 
       {/* Subtle gradient overlay — darkens bottom for readability */}
-      <div className="absolute inset-0 z-10" style={{ background: 'linear-gradient(to bottom, rgba(0,0,0,0.2) 0%, rgba(0,0,0,0.7) 100%)' }} />
+      <div className="absolute inset-0 z-10" style={{ background: 'linear-gradient(to bottom, rgba(0,0,0,0.1) 0%, rgba(0,0,0,0.5) 100%)' }} />
 
       {/* UI */}
       <div className="relative z-20 w-full max-w-sm flex flex-col gap-8">
