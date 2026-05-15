@@ -17,7 +17,7 @@ export default function Home() {
   const [error, setError] = useState('')
 
   async function createRoom() {
-    if (!name.trim()) return setError('Enter your name')
+    if (name.trim().length < 3) return setError('Name must be at least 3 characters')
     setLoading(true)
     setError('')
     const id = generateRoomCode()
@@ -32,7 +32,7 @@ export default function Home() {
   }
 
   async function joinRoom() {
-    if (!name.trim()) return setError('Enter your name')
+    if (name.trim().length < 3) return setError('Name must be at least 3 characters')
     if (!roomCode.trim()) return setError('Enter a room code')
     setLoading(true)
     setError('')
@@ -44,6 +44,9 @@ export default function Home() {
     const { data: existing } = await supabase.from('players').select().eq('room_id', code).eq('name', name.trim()).single()
     let playerId = existing?.id
     if (!playerId) {
+      // Check for duplicate name
+      const { data: taken } = await supabase.from('players').select('id').eq('room_id', code).ilike('name', name.trim())
+      if (taken && taken.length > 0) { setError('That name is already taken in this room'); setLoading(false); return }
       const { data: newPlayer } = await supabase.from('players').insert({ room_id: code, name: name.trim() }).select().single()
       playerId = newPlayer?.id
     }
