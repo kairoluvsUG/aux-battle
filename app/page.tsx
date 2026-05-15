@@ -23,10 +23,11 @@ export default function Home() {
     const id = generateRoomCode()
     const { error: err } = await supabase.from('rooms').insert({ id, host_name: name.trim() })
     if (err) { setError('Failed to create room'); setLoading(false); return }
-    await supabase.from('players').insert({ room_id: id, name: name.trim() })
+    const { data: playerData } = await supabase.from('players').insert({ room_id: id, name: name.trim() }).select().single()
     localStorage.setItem('playerName', name.trim())
     localStorage.setItem('roomId', id)
     localStorage.setItem('isHost', 'true')
+    localStorage.setItem('playerId', playerData?.id || '')
     router.push(`/room/${id}`)
   }
 
@@ -39,10 +40,17 @@ export default function Home() {
     const { data: room, error: roomErr } = await supabase.from('rooms').select().eq('id', code).single()
     if (roomErr || !room) { setError('Room not found'); setLoading(false); return }
     if (room.status !== 'lobby') { setError('Game already started'); setLoading(false); return }
-    await supabase.from('players').insert({ room_id: code, name: name.trim() })
+    // Check if player already exists (rejoining)
+    const { data: existing } = await supabase.from('players').select().eq('room_id', code).eq('name', name.trim()).single()
+    let playerId = existing?.id
+    if (!playerId) {
+      const { data: newPlayer } = await supabase.from('players').insert({ room_id: code, name: name.trim() }).select().single()
+      playerId = newPlayer?.id
+    }
     localStorage.setItem('playerName', name.trim())
     localStorage.setItem('roomId', code)
     localStorage.setItem('isHost', 'false')
+    localStorage.setItem('playerId', playerId || '')
     router.push(`/room/${code}`)
   }
 

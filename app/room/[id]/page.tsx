@@ -62,10 +62,23 @@ export default function RoomPage() {
         position: Math.floor(i / 2),
         player1_id: shuffled[i].id,
         player2_id: shuffled[i + 1]?.id || null,
+        status: i === 0 ? 'submitting' : 'pending',
       })
     }
     await supabase.from('matches').insert(matches)
     await supabase.from('rooms').update({ status: 'playing' }).eq('id', id)
+  }
+
+  async function leaveRoom() {
+    const playerId = localStorage.getItem('playerId')
+    if (playerId && !isHost) {
+      await supabase.from('players').delete().eq('id', playerId)
+    }
+    localStorage.removeItem('playerName')
+    localStorage.removeItem('roomId')
+    localStorage.removeItem('isHost')
+    localStorage.removeItem('playerId')
+    router.push('/')
   }
 
   if (!room) return (
@@ -78,18 +91,7 @@ export default function RoomPage() {
     <div className="min-h-screen relative flex flex-col items-center justify-center p-6 overflow-hidden">
 
       {/* Babyfxce E background */}
-      <div
-        className="absolute inset-0 z-0"
-        style={{
-          backgroundImage: 'url(/babyfxce.jpg)',
-          backgroundSize: 'cover',
-          backgroundPosition: 'center top',
-          backgroundRepeat: 'no-repeat',
-          filter: 'grayscale(20%) brightness(0.75)',
-        }}
-      />
-
-      {/* Gradient overlay */}
+      <div className="absolute inset-0 z-0" style={{ backgroundImage: 'url(/babyfxce.jpg)', backgroundSize: 'cover', backgroundPosition: 'center top', backgroundRepeat: 'no-repeat', filter: 'grayscale(20%) brightness(0.75)' }} />
       <div className="absolute inset-0 z-10" style={{ background: 'linear-gradient(to bottom, rgba(0,0,0,0.1) 0%, rgba(0,0,0,0.5) 100%)' }} />
 
       {/* UI */}
@@ -121,23 +123,32 @@ export default function RoomPage() {
           </div>
         </div>
 
-        {/* Action */}
-        {isHost ? (
-          <div className="flex flex-col gap-2">
-            {players.length < 2 && (
-              <p className="text-white/30 text-xs tracking-widest uppercase">Need at least 2 players</p>
-            )}
-            <button
-              onClick={startGame}
-              disabled={players.length < 2 || starting}
-              className="w-full py-3 bg-white text-black font-semibold text-sm tracking-widest uppercase rounded-lg hover:bg-white/90 disabled:opacity-30 transition-colors"
-            >
-              {starting ? 'Building Bracket...' : 'Start Game'}
-            </button>
-          </div>
-        ) : (
-          <p className="text-white/30 text-xs tracking-widest uppercase">Waiting for host to start...</p>
-        )}
+        {/* Actions */}
+        <div className="flex flex-col gap-3">
+          {isHost ? (
+            <>
+              {players.length < 2 && (
+                <p className="text-white/30 text-xs tracking-widest uppercase">Need at least 2 players</p>
+              )}
+              <button
+                onClick={startGame}
+                disabled={players.length < 2 || starting}
+                className="w-full py-3 bg-white text-black font-semibold text-sm tracking-widest uppercase rounded-lg hover:bg-white/90 disabled:opacity-30 transition-colors"
+              >
+                {starting ? 'Building Bracket...' : 'Start Game'}
+              </button>
+            </>
+          ) : (
+            <p className="text-white/30 text-xs tracking-widest uppercase">Waiting for host to start...</p>
+          )}
+
+          <button
+            onClick={leaveRoom}
+            className="w-full py-3 bg-transparent border border-white/20 text-white/50 font-semibold text-sm tracking-widest uppercase rounded-lg hover:border-white/50 hover:text-white/80 transition-colors"
+          >
+            Leave Room
+          </button>
+        </div>
       </div>
     </div>
   )
