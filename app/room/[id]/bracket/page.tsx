@@ -41,7 +41,8 @@ export default function BracketPage() {
   const [finished, setFinished] = useState(false)
   const matchIdsRef = useRef<Set<string>>(new Set())
 
-  const currentMatch = matches.find(m => m.status !== 'complete' && m.status !== 'pending')
+  const allPending = matches.length > 0 && matches.every(m => m.status === 'pending')
+  const currentMatch = allPending ? null : matches.find(m => m.status !== 'complete' && m.status !== 'pending')
   const maxRound = matches.length > 0 ? Math.max(...matches.map(m => m.round)) : 1
 
   const loadAll = useCallback(async () => {
@@ -221,11 +222,46 @@ export default function BracketPage() {
       <div className="relative z-20 w-full max-w-lg mx-auto flex flex-col gap-6 pt-6">
         <div className="flex items-end justify-between">
           <div>
-            <p className="text-xs tracking-[0.3em] text-white/40 uppercase mb-1">Round {currentMatch?.round ?? maxRound}</p>
+            <p className="text-xs tracking-[0.3em] text-white/40 uppercase mb-1">
+              {allPending ? 'The Bracket' : `Round ${currentMatch?.round ?? maxRound}`}
+            </p>
             <h1 className="text-4xl font-bold text-white leading-none">AUX BATTLE</h1>
           </div>
           <button onClick={() => router.push('/')} className="text-white/30 text-xs tracking-widest uppercase hover:text-white/60 transition-colors">Leave</button>
         </div>
+
+        {/* Bracket reveal — shown before any match starts */}
+        {allPending && (
+          <div className="bg-black/40 backdrop-blur-sm rounded-2xl p-5 border border-white/10 flex flex-col gap-4">
+            <p className="text-xs tracking-[0.3em] text-white/50 uppercase">Round 1 Matchups</p>
+            {matches.filter(m => m.round === 1).map((match, i) => (
+              <div key={match.id} className="flex items-center justify-between py-3 border-b border-white/10 last:border-0">
+                <span className="text-white font-semibold">{pName(players, match.player1_id)}</span>
+                <span className="text-white/30 text-xs px-3">vs</span>
+                <span className="text-white font-semibold">{pName(players, match.player2_id)}</span>
+                {match.player2_id === null && (
+                  <span className="text-white/20 text-xs ml-2">auto-advance</span>
+                )}
+              </div>
+            ))}
+            {isHost && (
+              <button
+                onClick={async () => {
+                  const first = matches.find(m => m.round === 1 && m.position === 0)
+                  if (!first) return
+                  setMatches(prev => prev.map(m => m.id === first.id ? { ...m, status: 'submitting' } : m))
+                  await supabase.from('matches').update({ status: 'submitting' }).eq('id', first.id)
+                }}
+                className="w-full py-3 bg-white text-black font-semibold text-sm tracking-widest uppercase rounded-lg hover:bg-white/90 transition-colors mt-2"
+              >
+                Start Match 1 →
+              </button>
+            )}
+            {!isHost && (
+              <p className="text-white/30 text-xs tracking-widest uppercase text-center">Waiting for host to start...</p>
+            )}
+          </div>
+        )}
 
         {currentMatch && (
           <div className="bg-black/40 backdrop-blur-sm rounded-2xl p-5 border border-white/10 flex flex-col gap-5">

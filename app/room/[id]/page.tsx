@@ -67,7 +67,7 @@ export default function RoomPage() {
           position: Math.floor(i / 2),
           player1_id: shuffled[i].id,
           player2_id: shuffled[i + 1]?.id || null,
-          status: i === 0 ? 'submitting' : 'pending',
+          status: 'pending',
         })
       }
       await supabase.from('matches').insert(matches)
