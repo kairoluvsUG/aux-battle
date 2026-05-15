@@ -9,16 +9,12 @@ function generateRoomCode() {
 }
 
 const VIDEOS = [
-  { id: 'xpVfcZ0ZcFM', start: 30 },  // Drake - God's Plan
-  { id: 'tvTRZJ-4EyI', start: 10 },  // Kendrick - HUMBLE.
-  { id: '6ONRf7h3Mdk', start: 25 },  // Travis Scott - SICKO MODE
-  { id: 'PEGccV-NOm8', start: 15 },  // Cardi B - Bodak Yellow
-  { id: 'UceaB4D0jpo', start: 20 },  // Post Malone - Rockstar
-  { id: 'LITFMyRkMi0', start: 40 },  // Migos - Bad and Boujee
-  { id: 'RKnAIQ4Ksr4', start: 18 },  // Lil Uzi - XO TOUR
-  { id: 'xvZqHgFz51I', start: 22 },  // Future - Mask Off
-  { id: 'mzB1VGEGcSU', start: 35 },  // Juice WRLD - Lucid Dreams
-  { id: 'wE7RLqCeLDg', start: 12 },  // 21 Savage - Bank Account
+  { id: 'N5dOy9FGtDg', start: 20 },
+  { id: 'UQ13LFqaTF8', start: 20 },
+  { id: 'm62C4760yHM', start: 20 },
+  { id: 'pGsetzZscws', start: 20 },
+  { id: 'IXJTaHySW8I', start: 20 },
+  { id: 'WNbwfHe1kSc', start: 20 },
 ]
 
 declare global {
@@ -58,6 +54,9 @@ export default function Home() {
           start: VIDEOS[0].start,
           playsinline: 1,
           modestbranding: 1,
+          iv_load_policy: 3,
+          disablekb: 1,
+          fs: 0,
         },
         events: {
           onReady: (e: any) => {
@@ -129,11 +128,13 @@ export default function Home() {
         className="absolute inset-0 z-0 transition-opacity duration-500"
         style={{ opacity: fade ? 1 : 0 }}
       >
-        <div id="yt-bg" className="absolute inset-0 w-full h-full pointer-events-none" style={{ transform: 'scale(1.5)' }} />
+        <div id="yt-bg" style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: '177.78vh', height: '100vh', minWidth: '100%', minHeight: '56.25vw', pointerEvents: 'none' }} />
+        {/* Invisible click blocker so pause icon never shows */}
+        <div className="absolute inset-0" style={{ zIndex: 1 }} />
       </div>
 
       {/* Dark overlay */}
-      <div className="absolute inset-0 z-10 bg-black/70" />
+      <div className="absolute inset-0 z-10 bg-black/50" />
 
       {/* UI */}
       <div className="relative z-20 w-full max-w-md">
