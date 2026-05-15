@@ -1,27 +1,11 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 
 function generateRoomCode() {
   return Math.random().toString(36).substring(2, 8).toUpperCase()
-}
-
-const VIDEOS = [
-  { id: 'N5dOy9FGtDg', start: 20 },
-  { id: 'UQ13LFqaTF8', start: 20 },
-  { id: 'm62C4760yHM', start: 20 },
-  { id: 'pGsetzZscws', start: 20 },
-  { id: 'IXJTaHySW8I', start: 20 },
-  { id: 'WNbwfHe1kSc', start: 20 },
-]
-
-declare global {
-  interface Window {
-    YT: any
-    onYouTubeIframeAPIReady: () => void
-  }
 }
 
 export default function Home() {
@@ -31,72 +15,6 @@ export default function Home() {
   const [mode, setMode] = useState<'home' | 'create' | 'join'>('home')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [fade, setFade] = useState(true)
-  const [covered, setCovered] = useState(true)
-  const playerRef = useRef<any>(null)
-  const videoIndexRef = useRef(0)
-  const intervalRef = useRef<NodeJS.Timeout | null>(null)
-
-  useEffect(() => {
-    const tag = document.createElement('script')
-    tag.src = 'https://www.youtube.com/iframe_api'
-    document.head.appendChild(tag)
-
-    window.onYouTubeIframeAPIReady = () => {
-      playerRef.current = new window.YT.Player('yt-bg', {
-        videoId: VIDEOS[0].id,
-        playerVars: {
-          autoplay: 1,
-          mute: 1,
-          controls: 0,
-          showinfo: 0,
-          rel: 0,
-          loop: 0,
-          start: VIDEOS[0].start,
-          playsinline: 1,
-          modestbranding: 1,
-          iv_load_policy: 3,
-          disablekb: 1,
-          fs: 0,
-        },
-        events: {
-          onReady: (e: any) => {
-            e.target.playVideo()
-            startCycling()
-          },
-          onStateChange: (e: any) => {
-            if (e.data === 1) {
-              // Wait 1.5s after playing starts, then uncover
-              setTimeout(() => setCovered(false), 1500)
-            }
-          },
-        },
-      })
-    }
-
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current)
-    }
-  }, [])
-
-  function startCycling() {
-    const duration = Math.floor(Math.random() * 3000) + 2000
-    intervalRef.current = setTimeout(function cycle() {
-      setFade(false)
-      setTimeout(() => {
-        videoIndexRef.current = (videoIndexRef.current + 1) % VIDEOS.length
-        const next = VIDEOS[videoIndexRef.current]
-        if (playerRef.current) {
-          playerRef.current.loadVideoById({ videoId: next.id, startSeconds: next.start })
-          playerRef.current.mute()
-        }
-        setCovered(true)
-        setFade(true)
-        const nextDuration = Math.floor(Math.random() * 3000) + 2000
-        intervalRef.current = setTimeout(cycle, nextDuration)
-      }, 500)
-    }, duration)
-  }
 
   async function createRoom() {
     if (!name.trim()) return setError('Enter your name')
@@ -131,78 +49,97 @@ export default function Home() {
   return (
     <div className="min-h-screen relative flex flex-col items-center justify-center p-6 overflow-hidden">
 
-      {/* YouTube background */}
+      {/* Carti background */}
       <div
-        className="absolute inset-0 z-0 transition-opacity duration-500"
-        style={{ opacity: fade ? 1 : 0 }}
-      >
-        <div id="yt-bg" style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: '177.78vh', height: '100vh', minWidth: '100%', minHeight: '56.25vw', pointerEvents: 'none' }} />
-        {/* Black cover that hides the iframe until video is fully playing */}
-        <div
-          className="absolute inset-0 bg-black transition-opacity duration-700"
-          style={{ zIndex: 2, opacity: covered ? 1 : 0 }}
-        />
-      </div>
+        className="absolute inset-0 z-0"
+        style={{
+          backgroundImage: 'url(/carti.jpg)',
+          backgroundSize: 'cover',
+          backgroundPosition: 'center top',
+          backgroundRepeat: 'no-repeat',
+          filter: 'grayscale(20%) brightness(0.55)',
+        }}
+      />
 
-      {/* Dark overlay */}
-      <div className="absolute inset-0 z-10 bg-black/50" />
+      {/* Subtle gradient overlay — darkens bottom for readability */}
+      <div className="absolute inset-0 z-10" style={{ background: 'linear-gradient(to bottom, rgba(0,0,0,0.2) 0%, rgba(0,0,0,0.7) 100%)' }} />
 
       {/* UI */}
-      <div className="relative z-20 w-full max-w-md">
-        <div className="text-center mb-10">
-          <h1 className="text-7xl font-black text-white mb-2 tracking-widest drop-shadow-[0_0_20px_rgba(168,85,247,0.8)]" style={{ fontFamily: 'var(--font-display)' }}>🎵 AUX BATTLE</h1>
-          <p className="text-purple-300 text-lg tracking-widest uppercase" style={{ fontFamily: 'var(--font-mono)' }}>The ultimate music bracket showdown</p>
+      <div className="relative z-20 w-full max-w-sm flex flex-col gap-8">
+
+        {/* Title */}
+        <div>
+          <p className="text-xs tracking-[0.3em] text-white/50 uppercase mb-1">Music Battle</p>
+          <h1 className="text-6xl font-bold text-white leading-none tracking-tight">AUX<br />BATTLE</h1>
         </div>
 
         {mode === 'home' && (
-          <div className="flex flex-col gap-4">
-            <button onClick={() => setMode('create')} className="w-full py-4 bg-purple-600 hover:bg-purple-500 text-white font-bold text-lg rounded-2xl transition-colors">
+          <div className="flex flex-col gap-3">
+            <button
+              onClick={() => setMode('create')}
+              className="w-full py-3 bg-white text-black font-semibold text-sm tracking-widest uppercase rounded-lg hover:bg-white/90 transition-colors"
+            >
               Create Room
             </button>
-            <button onClick={() => setMode('join')} className="w-full py-4 bg-zinc-800 hover:bg-zinc-700 text-white font-bold text-lg rounded-2xl transition-colors">
+            <button
+              onClick={() => setMode('join')}
+              className="w-full py-3 bg-transparent border border-white/40 text-white font-semibold text-sm tracking-widest uppercase rounded-lg hover:border-white/80 transition-colors"
+            >
               Join Room
             </button>
           </div>
         )}
 
         {mode === 'create' && (
-          <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-3">
             <input
               type="text"
               placeholder="Your name"
               value={name}
               onChange={e => setName(e.target.value)}
-              className="w-full py-4 px-5 bg-zinc-800/80 text-white rounded-2xl text-lg outline-none focus:ring-2 focus:ring-purple-500 placeholder:text-zinc-500"
+              className="w-full py-3 px-4 bg-white/10 border border-white/20 text-white rounded-lg text-sm outline-none focus:border-white/60 placeholder:text-white/30 transition-colors"
             />
-            {error && <p className="text-red-400 text-sm">{error}</p>}
-            <button onClick={createRoom} disabled={loading} className="w-full py-4 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white font-bold text-lg rounded-2xl transition-colors">
+            {error && <p className="text-red-400 text-xs">{error}</p>}
+            <button
+              onClick={createRoom}
+              disabled={loading}
+              className="w-full py-3 bg-white text-black font-semibold text-sm tracking-widest uppercase rounded-lg hover:bg-white/90 disabled:opacity-40 transition-colors"
+            >
               {loading ? 'Creating...' : 'Create Room'}
             </button>
-            <button onClick={() => { setMode('home'); setError('') }} className="text-zinc-400 hover:text-white transition-colors text-sm">← Back</button>
+            <button onClick={() => { setMode('home'); setError('') }} className="text-white/40 hover:text-white/70 text-xs tracking-widest uppercase transition-colors">
+              ← Back
+            </button>
           </div>
         )}
 
         {mode === 'join' && (
-          <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-3">
             <input
               type="text"
               placeholder="Your name"
               value={name}
               onChange={e => setName(e.target.value)}
-              className="w-full py-4 px-5 bg-zinc-800/80 text-white rounded-2xl text-lg outline-none focus:ring-2 focus:ring-purple-500 placeholder:text-zinc-500"
+              className="w-full py-3 px-4 bg-white/10 border border-white/20 text-white rounded-lg text-sm outline-none focus:border-white/60 placeholder:text-white/30 transition-colors"
             />
             <input
               type="text"
               placeholder="Room code"
               value={roomCode}
               onChange={e => setRoomCode(e.target.value.toUpperCase())}
-              className="w-full py-4 px-5 bg-zinc-800/80 text-white rounded-2xl text-lg outline-none focus:ring-2 focus:ring-purple-500 placeholder:text-zinc-500 tracking-widest"
+              className="w-full py-3 px-4 bg-white/10 border border-white/20 text-white rounded-lg text-sm outline-none focus:border-white/60 placeholder:text-white/30 tracking-widest transition-colors"
             />
-            {error && <p className="text-red-400 text-sm">{error}</p>}
-            <button onClick={joinRoom} disabled={loading} className="w-full py-4 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white font-bold text-lg rounded-2xl transition-colors">
+            {error && <p className="text-red-400 text-xs">{error}</p>}
+            <button
+              onClick={joinRoom}
+              disabled={loading}
+              className="w-full py-3 bg-white text-black font-semibold text-sm tracking-widest uppercase rounded-lg hover:bg-white/90 disabled:opacity-40 transition-colors"
+            >
               {loading ? 'Joining...' : 'Join Room'}
             </button>
-            <button onClick={() => { setMode('home'); setError('') }} className="text-zinc-400 hover:text-white transition-colors text-sm">← Back</button>
+            <button onClick={() => { setMode('home'); setError('') }} className="text-white/40 hover:text-white/70 text-xs tracking-widest uppercase transition-colors">
+              ← Back
+            </button>
           </div>
         )}
       </div>
