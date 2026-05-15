@@ -64,8 +64,12 @@ export default function Home() {
             startCycling()
           },
           onStateChange: (e: any) => {
-            // Only reveal video once it's actually playing — hides the pause icon
-            if (e.data === 1) setFade(true)
+            if (e.data === 1) {
+              // Seek 2 seconds forward to skip past the pause icon flash, then show
+              const current = e.target.getCurrentTime()
+              e.target.seekTo(current + 2, true)
+              setTimeout(() => setFade(true), 600)
+            }
           },
         },
       })
