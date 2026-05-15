@@ -32,6 +32,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [fade, setFade] = useState(true)
+  const [covered, setCovered] = useState(true)
   const playerRef = useRef<any>(null)
   const videoIndexRef = useRef(0)
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
@@ -65,10 +66,8 @@ export default function Home() {
           },
           onStateChange: (e: any) => {
             if (e.data === 1) {
-              // Seek 2 seconds forward to skip past the pause icon flash, then show
-              const current = e.target.getCurrentTime()
-              e.target.seekTo(current + 2, true)
-              setTimeout(() => setFade(true), 600)
+              // Wait 1.5s after playing starts, then uncover
+              setTimeout(() => setCovered(false), 1500)
             }
           },
         },
@@ -91,7 +90,8 @@ export default function Home() {
           playerRef.current.loadVideoById({ videoId: next.id, startSeconds: next.start })
           playerRef.current.mute()
         }
-        // Don't setFade(true) here — onStateChange handles it when video starts playing
+        setCovered(true)
+        setFade(true)
         const nextDuration = Math.floor(Math.random() * 3000) + 2000
         intervalRef.current = setTimeout(cycle, nextDuration)
       }, 500)
@@ -137,8 +137,11 @@ export default function Home() {
         style={{ opacity: fade ? 1 : 0 }}
       >
         <div id="yt-bg" style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: '177.78vh', height: '100vh', minWidth: '100%', minHeight: '56.25vw', pointerEvents: 'none' }} />
-        {/* Invisible click blocker so pause icon never shows */}
-        <div className="absolute inset-0" style={{ zIndex: 1 }} />
+        {/* Black cover that hides the iframe until video is fully playing */}
+        <div
+          className="absolute inset-0 bg-black transition-opacity duration-700"
+          style={{ zIndex: 2, opacity: covered ? 1 : 0 }}
+        />
       </div>
 
       {/* Dark overlay */}
