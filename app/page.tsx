@@ -63,6 +63,10 @@ export default function Home() {
             e.target.playVideo()
             startCycling()
           },
+          onStateChange: (e: any) => {
+            // Only reveal video once it's actually playing — hides the pause icon
+            if (e.data === 1) setFade(true)
+          },
         },
       })
     }
@@ -83,7 +87,7 @@ export default function Home() {
           playerRef.current.loadVideoById({ videoId: next.id, startSeconds: next.start })
           playerRef.current.mute()
         }
-        setFade(true)
+        // Don't setFade(true) here — onStateChange handles it when video starts playing
         const nextDuration = Math.floor(Math.random() * 3000) + 2000
         intervalRef.current = setTimeout(cycle, nextDuration)
       }, 500)
