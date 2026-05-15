@@ -35,6 +35,7 @@ export default function BracketPage() {
   const [votes, setVotes] = useState<Vote[]>([])
   const [isHost, setIsHost] = useState(false)
   const [myPlayerId, setMyPlayerId] = useState('')
+  const [judgeMode, setJudgeMode] = useState<'audience' | 'host'>('audience')
   const [mySong, setMySong] = useState('')
   const [myVote, setMyVote] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
@@ -46,19 +47,25 @@ export default function BracketPage() {
   const maxRound = matches.length > 0 ? Math.max(...matches.map(m => m.round)) : 1
 
   const loadAll = useCallback(async () => {
-    const [mRes, pRes, vRes] = await Promise.all([
+    const [mRes, pRes, rRes] = await Promise.all([
       supabase.from('matches').select().eq('room_id', id).order('round').order('position'),
       supabase.from('players').select().eq('room_id', id),
-      supabase.from('votes').select().in('match_id',
-        (await supabase.from('matches').select('id').eq('room_id', id)).data?.map(m => m.id) || []
-      ),
+      supabase.from('rooms').select('judge_mode, status').eq('id', id).single(),
     ])
     if (mRes.data) {
       setMatches(mRes.data)
       matchIdsRef.current = new Set(mRes.data.map((m: Match) => m.id))
+      const ids = mRes.data.map((m: Match) => m.id)
+      if (ids.length) {
+        const vRes = await supabase.from('votes').select().in('match_id', ids)
+        if (vRes.data) setVotes(vRes.data)
+      }
     }
     if (pRes.data) setPlayers(pRes.data)
-    if (vRes.data) setVotes(vRes.data)
+    if (rRes.data) {
+      setJudgeMode(rRes.data.judge_mode as 'audience' | 'host')
+      if (rRes.data.status === 'finished') setFinished(true)
+    }
   }, [id])
 
   useEffect(() => {
@@ -88,6 +95,7 @@ export default function BracketPage() {
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${id}` }, (payload) => {
         if (payload.new.status === 'finished') setFinished(true)
+        if (payload.new.judge_mode) setJudgeMode(payload.new.judge_mode as 'audience' | 'host')
       })
       .subscribe()
 
@@ -206,6 +214,8 @@ export default function BracketPage() {
   const p1Votes = matchVotes.filter(v => v.voted_for === currentMatch?.player1_id).length
   const p2Votes = matchVotes.filter(v => v.voted_for === currentMatch?.player2_id).length
   const bothSubmitted = !!(currentMatch?.player1_song && currentMatch?.player2_song)
+  // Who can vote: host mode = only host, audience mode = everyone except the two competing
+  const canVote = judgeMode === 'host' ? isHost : !isInMatch
 
   function renderEmbed(url: string | null, label: string) {
     if (!url) return null
@@ -326,8 +336,16 @@ export default function BracketPage() {
 
             {currentMatch.status === 'voting' && (
               <div className="flex flex-col gap-4">
-                <p className="text-white/40 text-xs uppercase tracking-widest">Vote for your favorite</p>
-                {!myVote ? (
+                <div className="flex items-center justify-between">
+                  <p className="text-white/40 text-xs uppercase tracking-widest">
+                    {judgeMode === 'host' ? 'Host is deciding...' : 'Vote for your favorite'}
+                  </p>
+                  <p className="text-white/20 text-xs uppercase tracking-widest">
+                    {judgeMode === 'host' ? 'Host judge' : 'Audience judge'}
+                  </p>
+                </div>
+
+                {canVote && !myVote && (
                   <div className="flex gap-3">
                     <button onClick={() => castVote(currentMatch.player1_id!)} className="flex-1 py-4 bg-white/10 border border-white/20 text-white font-semibold text-sm rounded-xl hover:bg-white/20 active:scale-95 transition-all">
                       {pName(players, currentMatch.player1_id)}
@@ -336,7 +354,9 @@ export default function BracketPage() {
                       {pName(players, currentMatch.player2_id)}
                     </button>
                   </div>
-                ) : (
+                )}
+
+                {canVote && myVote && (
                   <div className="flex flex-col gap-3">
                     <p className="text-white/40 text-xs uppercase tracking-widest">Voted ✓</p>
                     <div className="flex gap-3">
@@ -351,6 +371,13 @@ export default function BracketPage() {
                     </div>
                   </div>
                 )}
+
+                {!canVote && (
+                  <p className="text-white/30 text-xs uppercase tracking-widest">
+                    {isInMatch ? 'You\'re competing — sit tight' : 'Waiting for votes...'}
+                  </p>
+                )}
+
                 {isHost && <button onClick={finishMatch} className="w-full py-3 bg-white text-black font-semibold text-sm tracking-widest uppercase rounded-lg">Decide Winner →</button>}
               </div>
             )}

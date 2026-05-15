@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 
 type Player = { id: string; name: string; room_id: string }
-type Room = { id: string; host_name: string; status: string }
+type Room = { id: string; host_name: string; status: string; judge_mode: string }
 
 export default function RoomPage() {
   const { id } = useParams<{ id: string }>()
@@ -13,7 +13,9 @@ export default function RoomPage() {
   const [room, setRoom] = useState<Room | null>(null)
   const [players, setPlayers] = useState<Player[]>([])
   const [isHost, setIsHost] = useState(false)
+  const [myPlayerId, setMyPlayerId] = useState('')
   const [starting, setStarting] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
 
   const load = useCallback(async () => {
     const { data: roomData } = await supabase.from('rooms').select().eq('id', id).single()
@@ -25,7 +27,10 @@ export default function RoomPage() {
   }, [id, router])
 
   useEffect(() => {
-    setIsHost(localStorage.getItem('isHost') === 'true')
+    const host = localStorage.getItem('isHost') === 'true'
+    const pid = localStorage.getItem('playerId') || ''
+    setIsHost(host)
+    setMyPlayerId(pid)
     load()
 
     const sub = supabase
@@ -37,14 +42,16 @@ export default function RoomPage() {
         })
       })
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'players', filter: `room_id=eq.${id}` }, (payload) => {
+        // If I was kicked, go home
+        if (payload.old.id === myPlayerId) { router.push('/'); return }
         setPlayers(prev => prev.filter(p => p.id !== payload.old.id))
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${id}` }, (payload) => {
         if (payload.new.status === 'playing') router.push(`/room/${id}/bracket`)
+        setRoom(payload.new as Room)
       })
       .subscribe()
 
-    // Refetch when tab becomes visible again
     const onVisible = () => { if (document.visibilityState === 'visible') load() }
     document.addEventListener('visibilitychange', onVisible)
 
@@ -52,7 +59,7 @@ export default function RoomPage() {
       supabase.removeChannel(sub)
       document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [id, load, router])
+  }, [id, load, router, myPlayerId])
 
   async function startGame() {
     if (players.length < 2 || starting) return
@@ -62,9 +69,7 @@ export default function RoomPage() {
       const matches = []
       for (let i = 0; i < shuffled.length; i += 2) {
         matches.push({
-          room_id: id,
-          round: 1,
-          position: Math.floor(i / 2),
+          room_id: id, round: 1, position: Math.floor(i / 2),
           player1_id: shuffled[i].id,
           player2_id: shuffled[i + 1]?.id || null,
           status: 'pending',
@@ -72,18 +77,24 @@ export default function RoomPage() {
       }
       await supabase.from('matches').insert(matches)
       await supabase.from('rooms').update({ status: 'playing' }).eq('id', id)
-      // Navigate immediately — don't wait for realtime
       router.push(`/room/${id}/bracket`)
     } catch {
       setStarting(false)
     }
   }
 
+  async function kickPlayer(playerId: string) {
+    await supabase.from('players').delete().eq('id', playerId)
+  }
+
+  async function setJudgeMode(mode: string) {
+    setRoom(prev => prev ? { ...prev, judge_mode: mode } : prev)
+    await supabase.from('rooms').update({ judge_mode: mode }).eq('id', id)
+  }
+
   async function leaveRoom() {
     const playerId = localStorage.getItem('playerId')
-    if (playerId && !isHost) {
-      await supabase.from('players').delete().eq('id', playerId)
-    }
+    if (playerId && !isHost) await supabase.from('players').delete().eq('id', playerId)
     localStorage.removeItem('playerName')
     localStorage.removeItem('roomId')
     localStorage.removeItem('isHost')
@@ -102,13 +113,78 @@ export default function RoomPage() {
       <div className="absolute inset-0 z-0" style={{ backgroundImage: 'url(/babyfxce.jpg)', backgroundSize: 'cover', backgroundPosition: 'center 20%', backgroundRepeat: 'no-repeat', filter: 'grayscale(60%) brightness(0.85) contrast(1.1)' }} />
       <div className="absolute inset-0 z-10" style={{ background: 'linear-gradient(to bottom, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0.75) 100%)' }} />
 
-      <div className="relative z-20 w-full max-w-sm flex flex-col gap-8">
-        <div>
-          <p className="text-xs tracking-[0.3em] text-white/50 uppercase mb-1">Room Code</p>
-          <h1 className="text-6xl font-bold text-white leading-none tracking-tight">{id}</h1>
-          <p className="text-white/40 text-xs tracking-widest uppercase mt-2">Share with friends</p>
+      <div className="relative z-20 w-full max-w-sm flex flex-col gap-6">
+
+        {/* Header */}
+        <div className="flex items-start justify-between">
+          <div>
+            <p className="text-xs tracking-[0.3em] text-white/50 uppercase mb-1">Room Code</p>
+            <h1 className="text-6xl font-bold text-white leading-none tracking-tight">{id}</h1>
+            <p className="text-white/40 text-xs tracking-widest uppercase mt-2">Share with friends</p>
+          </div>
+          {isHost && (
+            <button
+              onClick={() => setShowSettings(s => !s)}
+              className={`mt-1 px-3 py-1.5 rounded-lg text-xs tracking-widest uppercase font-semibold border transition-colors ${showSettings ? 'bg-white text-black border-white' : 'border-white/20 text-white/50 hover:border-white/50 hover:text-white/80'}`}
+            >
+              {showSettings ? 'Done' : 'Settings'}
+            </button>
+          )}
         </div>
 
+        {/* Settings panel */}
+        {isHost && showSettings && (
+          <div className="bg-black/50 backdrop-blur-sm rounded-2xl p-5 border border-white/10 flex flex-col gap-5">
+
+            {/* Judge mode */}
+            <div>
+              <p className="text-xs tracking-[0.3em] text-white/50 uppercase mb-3">Judge Mode</p>
+              <div className="flex flex-col gap-2">
+                <button
+                  onClick={() => setJudgeMode('audience')}
+                  className={`w-full py-3 px-4 rounded-xl text-left text-sm font-semibold border transition-colors ${room.judge_mode === 'audience' ? 'bg-white text-black border-white' : 'bg-white/5 text-white/60 border-white/10 hover:border-white/30'}`}
+                >
+                  Everyone votes
+                  <span className={`block text-xs font-normal mt-0.5 ${room.judge_mode === 'audience' ? 'text-black/50' : 'text-white/30'}`}>
+                    All players except the two competing
+                  </span>
+                </button>
+                <button
+                  onClick={() => setJudgeMode('host')}
+                  className={`w-full py-3 px-4 rounded-xl text-left text-sm font-semibold border transition-colors ${room.judge_mode === 'host' ? 'bg-white text-black border-white' : 'bg-white/5 text-white/60 border-white/10 hover:border-white/30'}`}
+                >
+                  Host decides
+                  <span className={`block text-xs font-normal mt-0.5 ${room.judge_mode === 'host' ? 'text-black/50' : 'text-white/30'}`}>
+                    Only you pick the winner each round
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            {/* Kick players */}
+            <div>
+              <p className="text-xs tracking-[0.3em] text-white/50 uppercase mb-3">Kick Players</p>
+              <div className="flex flex-col gap-2">
+                {players.filter(p => p.name !== room.host_name).map(p => (
+                  <div key={p.id} className="flex items-center justify-between py-2 border-b border-white/10">
+                    <span className="text-white text-sm">{p.name}</span>
+                    <button
+                      onClick={() => kickPlayer(p.id)}
+                      className="text-red-400/70 hover:text-red-400 text-xs tracking-widest uppercase transition-colors"
+                    >
+                      Kick
+                    </button>
+                  </div>
+                ))}
+                {players.filter(p => p.name !== room.host_name).length === 0 && (
+                  <p className="text-white/20 text-xs tracking-widest uppercase">No other players yet</p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Players list */}
         <div>
           <p className="text-xs tracking-[0.3em] text-white/50 uppercase mb-3">Players ({players.length})</p>
           <div className="flex flex-col gap-2">
@@ -127,6 +203,7 @@ export default function RoomPage() {
           </div>
         </div>
 
+        {/* Actions */}
         <div className="flex flex-col gap-3">
           {isHost ? (
             <>
