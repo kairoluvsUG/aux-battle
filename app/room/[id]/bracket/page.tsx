@@ -226,9 +226,8 @@ export default function BracketPage() {
     if (!playing) { setTimeLeft(null); return }
 
     const matchId = currentMatch.id
-    // Song 1 just stops at 0 — host manually advances to song 2
-    // Song 2 auto-advances to voting when it runs out
-    const autoAdvanceTo = currentMatch.status === 'playing_p2' ? 'voting' : null
+    // Both songs auto-advance when the timer runs out
+    const autoAdvanceTo = currentMatch.status === 'playing_p1' ? 'playing_p2' : 'voting'
     setTimeLeft(SONG_TIMER)
 
     const interval = setInterval(() => {
@@ -566,7 +565,7 @@ export default function BracketPage() {
                     <div className="flex flex-col gap-1.5">
                       <div className="flex justify-between items-center">
                         <p className="text-white/30 text-xs uppercase tracking-widest">
-                          {timerPaused ? 'Paused' : timeLeft === 0 ? 'Song done' : 'Time left'}
+                          {timerPaused ? 'Paused' : 'Time left'}
                         </p>
                         <p className={`font-bold tabular-nums text-sm ${timeLeft <= 10 && !timerPaused ? 'text-red-400' : 'text-white/60'}`}>
                           {timeLeft}s
@@ -590,11 +589,6 @@ export default function BracketPage() {
                     ))}
                   </div>
 
-                  {/* Song 1 done — waiting for host to start song 2 */}
-                  {timeLeft === 0 && !isHost && (
-                    <p className="text-white/30 text-xs uppercase tracking-widest text-center">Waiting for host to play song 2...</p>
-                  )}
-
                   {isHost && (
                     <div className="flex flex-col gap-2">
                       {timeLeft !== null && timeLeft > 0 && (
@@ -603,7 +597,7 @@ export default function BracketPage() {
                         </button>
                       )}
                       <button onClick={() => hostSet('playing_p2')} className="w-full py-3 bg-white text-black font-semibold text-sm tracking-widest uppercase rounded-lg hover:bg-white/90 transition-colors">
-                        {timeLeft === 0 ? 'Play Song 2 →' : 'Skip — Play Song 2 →'}
+                        Skip — Play Song 2 →
                       </button>
                     </div>
                   )}
