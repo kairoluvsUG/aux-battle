@@ -176,7 +176,7 @@ export default function BracketPage() {
         if (payload.new.winner_message) setWinnerMessageSaved(payload.new.winner_message)
       })
       .on('broadcast', { event: 'reaction' }, ({ payload }) => {
-        addReaction(payload.emoji)
+        if (typeof payload?.emoji === 'string') addReaction(payload.emoji)
       })
       .subscribe()
 
@@ -192,8 +192,9 @@ export default function BracketPage() {
     }
   }, [id, loadAll])
 
-  // Restore vote state when match changes
+  // Restore vote state and clear song input when match changes
   useEffect(() => {
+    setMySong('')
     if (!currentMatch) { setMyVote(null); return }
     const myName = players.find(p => p.id === myPlayerId)?.name
     if (!myName) { setMyVote(null); return }
@@ -201,9 +202,10 @@ export default function BracketPage() {
     setMyVote(existing?.voted_for ?? null)
   }, [currentMatch?.id, myPlayerId, players, votes])
 
-  // Walk-up moment: show intro overlay when a new match starts
+  // Walk-up moment: show intro overlay when a real match starts (skip BYE)
   useEffect(() => {
     if (!currentMatch || currentMatch.status !== 'submitting') return
+    if (currentMatch.player2_id === null) return // BYE match — skip intro
     if (introShownRef.current === currentMatch.id) return
     introShownRef.current = currentMatch.id
     setShowIntro(true)
@@ -297,38 +299,41 @@ export default function BracketPage() {
   async function advanceMatch() {
     if (!currentMatch || advancingRef.current) return
     advancingRef.current = true
-    const winnerId = currentMatch.winner_id!
+    try {
+      const winnerId = currentMatch.winner_id!
 
-    setMatches(prev => prev.map(m => m.id === currentMatch.id ? { ...m, status: 'complete' } : m))
-    await supabase.from('matches').update({ status: 'complete' }).eq('id', currentMatch.id)
+      setMatches(prev => prev.map(m => m.id === currentMatch.id ? { ...m, status: 'complete' } : m))
+      await supabase.from('matches').update({ status: 'complete' }).eq('id', currentMatch.id)
 
-    const roundMatches = matches.filter(m => m.round === currentMatch.round)
-    const nextInRound = roundMatches.find(m => m.position === currentMatch.position + 1 && m.status === 'pending')
+      const roundMatches = matches.filter(m => m.round === currentMatch.round)
+      const nextInRound = roundMatches.find(m => m.position === currentMatch.position + 1 && m.status === 'pending')
 
-    if (nextInRound) {
-      setMatches(prev => prev.map(m => m.id === nextInRound.id ? { ...m, status: 'submitting' } : m))
-      await supabase.from('matches').update({ status: 'submitting' }).eq('id', nextInRound.id)
-    } else {
-      const allRound = roundMatches.map(m => m.id === currentMatch.id ? { ...m, winner_id: winnerId } : m)
-      const winners = allRound.map(m => m.winner_id).filter(Boolean) as string[]
-
-      if (winners.length <= 1) {
-        setFinished(true)
-        await supabase.from('rooms').update({ status: 'finished' }).eq('id', id)
+      if (nextInRound) {
+        setMatches(prev => prev.map(m => m.id === nextInRound.id ? { ...m, status: 'submitting' } : m))
+        await supabase.from('matches').update({ status: 'submitting' }).eq('id', nextInRound.id)
       } else {
-        const nextRound = currentMatch.round + 1
-        const nextMatches = []
-        for (let i = 0; i < winners.length; i += 2) {
-          nextMatches.push({
-            room_id: id, round: nextRound, position: Math.floor(i / 2),
-            player1_id: winners[i], player2_id: winners[i + 1] || null,
-            status: i === 0 ? 'submitting' : 'pending',
-          })
+        const allRound = roundMatches.map(m => m.id === currentMatch.id ? { ...m, winner_id: winnerId } : m)
+        const winners = allRound.map(m => m.winner_id).filter(Boolean) as string[]
+
+        if (winners.length <= 1) {
+          setFinished(true)
+          await supabase.from('rooms').update({ status: 'finished' }).eq('id', id)
+        } else {
+          const nextRound = currentMatch.round + 1
+          const nextMatches = []
+          for (let i = 0; i < winners.length; i += 2) {
+            nextMatches.push({
+              room_id: id, round: nextRound, position: Math.floor(i / 2),
+              player1_id: winners[i], player2_id: winners[i + 1] || null,
+              status: i === 0 ? 'submitting' : 'pending',
+            })
+          }
+          await supabase.from('matches').insert(nextMatches)
         }
-        await supabase.from('matches').insert(nextMatches)
       }
+    } finally {
+      advancingRef.current = false
     }
-    advancingRef.current = false
   }
 
   async function postWinnerMessage() {
@@ -413,6 +418,8 @@ export default function BracketPage() {
   const hasMoreInRound = currentMatch
     ? roundMatchesForCurrent.some(m => m.position > currentMatch.position && m.status === 'pending')
     : false
+  // One match left in this round means only 1 winner → tournament is over
+  const isFinalMatch = !hasMoreInRound && roundMatchesForCurrent.length === 1
 
   const timerPct = timeLeft !== null ? (timeLeft / SONG_TIMER) * 100 : 100
 
@@ -692,7 +699,7 @@ export default function BracketPage() {
 
                   {isHost ? (
                     <button onClick={advanceMatch} className="w-full py-3 bg-white text-black font-semibold text-sm tracking-widest uppercase rounded-lg hover:bg-white/90 transition-colors">
-                      {hasMoreInRound ? 'Next Match →' : 'Start Next Round →'}
+                      {hasMoreInRound ? 'Next Match →' : isFinalMatch ? 'Crown Champion →' : 'Start Next Round →'}
                     </button>
                   ) : (
                     <p className="text-white/30 text-xs uppercase tracking-widest">Waiting for host...</p>

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 
@@ -14,6 +14,7 @@ export default function RoomPage() {
   const [players, setPlayers] = useState<Player[]>([])
   const [isHost, setIsHost] = useState(false)
   const [myPlayerId, setMyPlayerId] = useState('')
+  const myPlayerIdRef = useRef('')
   const [starting, setStarting] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
 
@@ -31,6 +32,7 @@ export default function RoomPage() {
     const pid = localStorage.getItem('playerId') || ''
     setIsHost(host)
     setMyPlayerId(pid)
+    myPlayerIdRef.current = pid
     load()
 
     const sub = supabase
@@ -42,8 +44,8 @@ export default function RoomPage() {
         })
       })
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'players', filter: `room_id=eq.${id}` }, (payload) => {
-        // If I was kicked, go home
-        if (payload.old.id === myPlayerId) { router.push('/'); return }
+        // Use ref so this always has the current player ID regardless of closure staleness
+        if (payload.old.id === myPlayerIdRef.current) { router.push('/'); return }
         setPlayers(prev => prev.filter(p => p.id !== payload.old.id))
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${id}` }, (payload) => {
@@ -59,7 +61,7 @@ export default function RoomPage() {
       supabase.removeChannel(sub)
       document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [id, load, router, myPlayerId])
+  }, [id, load, router])
 
   async function startGame() {
     if (players.length < 2 || starting) return
