@@ -93,6 +93,7 @@ export default function BracketPage() {
   // Feature state
   const [showIntro, setShowIntro] = useState(false)
   const [timeLeft, setTimeLeft] = useState<number | null>(null)
+  const [timerPaused, setTimerPaused] = useState(false)
   const [reactions, setReactions] = useState<Reaction[]>([])
   const [winnerMessage, setWinnerMessage] = useState('')
   const [winnerMessageSaved, setWinnerMessageSaved] = useState<string | null>(null)
@@ -101,6 +102,7 @@ export default function BracketPage() {
   const advancingRef = useRef(false)
   const introShownRef = useRef<string | null>(null)
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null)
+  const timerPausedRef = useRef(false)
 
   const allPending = matches.length > 0 && matches.every(m => m.status === 'pending')
   const currentMatch = allPending ? null : matches.find(m => m.status !== 'complete' && m.status !== 'pending')
@@ -213,25 +215,31 @@ export default function BracketPage() {
     return () => clearTimeout(t)
   }, [currentMatch?.id, currentMatch?.status])
 
-  // Song timer: 45s countdown during playback, host auto-advances
+  // Song timer: 45s countdown per song; only song 2 auto-advances (song 1 just stops)
   useEffect(() => {
+    // Reset pause state whenever the song or match changes
+    timerPausedRef.current = false
+    setTimerPaused(false)
+
     if (!currentMatch) { setTimeLeft(null); return }
     const playing = currentMatch.status === 'playing_p1' || currentMatch.status === 'playing_p2'
     if (!playing) { setTimeLeft(null); return }
 
     const matchId = currentMatch.id
-    const nextStatus = currentMatch.status === 'playing_p1' ? 'playing_p2' : 'voting'
+    // Song 1 just stops at 0 — host manually advances to song 2
+    // Song 2 auto-advances to voting when it runs out
+    const autoAdvanceTo = currentMatch.status === 'playing_p2' ? 'voting' : null
     setTimeLeft(SONG_TIMER)
 
     const interval = setInterval(() => {
+      if (timerPausedRef.current) return // paused — skip this tick
       setTimeLeft(prev => {
         if (prev === null) return null
         if (prev <= 1) {
           clearInterval(interval)
-          // Only host triggers the DB update to avoid race conditions
-          if (localStorage.getItem('isHost') === 'true') {
-            setMatches(m => m.map(match => match.id === matchId ? { ...match, status: nextStatus } : match))
-            supabase.from('matches').update({ status: nextStatus }).eq('id', matchId)
+          if (autoAdvanceTo && localStorage.getItem('isHost') === 'true') {
+            setMatches(m => m.map(match => match.id === matchId ? { ...match, status: autoAdvanceTo } : match))
+            supabase.from('matches').update({ status: autoAdvanceTo }).eq('id', matchId)
           }
           return 0
         }
@@ -241,6 +249,12 @@ export default function BracketPage() {
 
     return () => clearInterval(interval)
   }, [currentMatch?.id, currentMatch?.status])
+
+  function toggleTimer() {
+    const next = !timerPausedRef.current
+    timerPausedRef.current = next
+    setTimerPaused(next)
+  }
 
   // Auto-advance BYE matches
   useEffect(() => {
@@ -551,13 +565,17 @@ export default function BracketPage() {
                   {timeLeft !== null && (
                     <div className="flex flex-col gap-1.5">
                       <div className="flex justify-between items-center">
-                        <p className="text-white/30 text-xs uppercase tracking-widest">Time left</p>
-                        <p className={`font-bold tabular-nums text-sm ${timeLeft <= 10 ? 'text-red-400' : 'text-white/60'}`}>{timeLeft}s</p>
+                        <p className="text-white/30 text-xs uppercase tracking-widest">
+                          {timerPaused ? 'Paused' : timeLeft === 0 ? 'Song done' : 'Time left'}
+                        </p>
+                        <p className={`font-bold tabular-nums text-sm ${timeLeft <= 10 && !timerPaused ? 'text-red-400' : 'text-white/60'}`}>
+                          {timeLeft}s
+                        </p>
                       </div>
                       <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
                         <div
-                          className="h-full bg-white rounded-full transition-all duration-1000 linear"
-                          style={{ width: `${timerPct}%`, backgroundColor: timeLeft <= 10 ? '#f87171' : 'white' }}
+                          className="h-full rounded-full transition-all duration-1000 linear"
+                          style={{ width: `${timerPct}%`, backgroundColor: timerPaused ? '#6b7280' : timeLeft <= 10 ? '#f87171' : 'white' }}
                         />
                       </div>
                     </div>
@@ -572,10 +590,22 @@ export default function BracketPage() {
                     ))}
                   </div>
 
+                  {/* Song 1 done — waiting for host to start song 2 */}
+                  {timeLeft === 0 && !isHost && (
+                    <p className="text-white/30 text-xs uppercase tracking-widest text-center">Waiting for host to play song 2...</p>
+                  )}
+
                   {isHost && (
-                    <button onClick={() => hostSet('playing_p2')} className="w-full py-3 bg-white text-black font-semibold text-sm tracking-widest uppercase rounded-lg hover:bg-white/90 transition-colors">
-                      Next — Play Song 2 →
-                    </button>
+                    <div className="flex flex-col gap-2">
+                      {timeLeft !== null && timeLeft > 0 && (
+                        <button onClick={toggleTimer} className="w-full py-2 border border-white/20 text-white/50 text-xs font-semibold tracking-widest uppercase rounded-lg hover:border-white/40 hover:text-white/70 transition-colors">
+                          {timerPaused ? '▶  Resume Timer' : '⏸  Pause Timer'}
+                        </button>
+                      )}
+                      <button onClick={() => hostSet('playing_p2')} className="w-full py-3 bg-white text-black font-semibold text-sm tracking-widest uppercase rounded-lg hover:bg-white/90 transition-colors">
+                        {timeLeft === 0 ? 'Play Song 2 →' : 'Skip — Play Song 2 →'}
+                      </button>
+                    </div>
                   )}
                 </div>
               )}
@@ -589,13 +619,17 @@ export default function BracketPage() {
                   {timeLeft !== null && (
                     <div className="flex flex-col gap-1.5">
                       <div className="flex justify-between items-center">
-                        <p className="text-white/30 text-xs uppercase tracking-widest">Time left</p>
-                        <p className={`font-bold tabular-nums text-sm ${timeLeft <= 10 ? 'text-red-400' : 'text-white/60'}`}>{timeLeft}s</p>
+                        <p className="text-white/30 text-xs uppercase tracking-widest">
+                          {timerPaused ? 'Paused' : 'Time left'}
+                        </p>
+                        <p className={`font-bold tabular-nums text-sm ${timeLeft <= 10 && !timerPaused ? 'text-red-400' : 'text-white/60'}`}>
+                          {timeLeft}s
+                        </p>
                       </div>
                       <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
                         <div
                           className="h-full rounded-full transition-all duration-1000 linear"
-                          style={{ width: `${timerPct}%`, backgroundColor: timeLeft <= 10 ? '#f87171' : 'white' }}
+                          style={{ width: `${timerPct}%`, backgroundColor: timerPaused ? '#6b7280' : timeLeft <= 10 ? '#f87171' : 'white' }}
                         />
                       </div>
                     </div>
@@ -611,9 +645,16 @@ export default function BracketPage() {
                   </div>
 
                   {isHost && (
-                    <button onClick={() => hostSet('voting')} className="w-full py-3 bg-white text-black font-semibold text-sm tracking-widest uppercase rounded-lg hover:bg-white/90 transition-colors">
-                      Open Voting →
-                    </button>
+                    <div className="flex flex-col gap-2">
+                      {timeLeft !== null && timeLeft > 0 && (
+                        <button onClick={toggleTimer} className="w-full py-2 border border-white/20 text-white/50 text-xs font-semibold tracking-widest uppercase rounded-lg hover:border-white/40 hover:text-white/70 transition-colors">
+                          {timerPaused ? '▶  Resume Timer' : '⏸  Pause Timer'}
+                        </button>
+                      )}
+                      <button onClick={() => hostSet('voting')} className="w-full py-3 bg-white text-black font-semibold text-sm tracking-widest uppercase rounded-lg hover:bg-white/90 transition-colors">
+                        Open Voting →
+                      </button>
+                    </div>
                   )}
                 </div>
               )}
